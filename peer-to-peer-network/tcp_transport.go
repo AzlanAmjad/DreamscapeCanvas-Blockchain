@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"time"
 
 	"github.com/go-kit/log"
 )
@@ -40,6 +41,8 @@ func (tp *TCPPeer) readLoop(rpcChannel chan ReceiveRPC) {
 		if err != nil {
 			fmt.Println("Error with connection:", tp.conn.RemoteAddr())
 			fmt.Println("Error reading from connection:", err)
+			// Wait 5 seconds before retrying
+			time.Sleep(5 * time.Second)
 			continue
 		}
 

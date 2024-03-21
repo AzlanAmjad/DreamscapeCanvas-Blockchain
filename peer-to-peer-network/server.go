@@ -2,6 +2,7 @@ package network
 
 import (
 	"bytes"
+	"encoding/gob"
 	"fmt"
 	"net"
 	"os"
@@ -170,6 +171,12 @@ func (s *Server) Start() error {
 			s.ServerOptions.Logger.Log("msg", "Peer added", "us", peer.conn.LocalAddr(), "peer", peer.conn.RemoteAddr())
 			// start reading from the peer
 			go peer.readLoop(s.rpcChannel)
+
+			// Probably not the right place to do this, but we need peers to exist before sending getstatus
+			err := s.broadcastGetStatus()
+			if err != nil {
+				logrus.WithError(err).Error("Failed to broadcast getStatus")
+			}
 		// receive RPC message to process
 		case rpc := <-s.rpcChannel:
 			// Decode the message.
@@ -232,12 +239,27 @@ func (s *Server) ProcessMessage(from net.Addr, decodedMessage *DecodedMessage) e
 			return fmt.Errorf("failed to cast message to block")
 		}
 		return s.processBlock(from, &block)
+	case GetStatus:
+		s.ServerOptions.Logger.Log("msg", "Handling GetStatus", "msg", decodedMessage.Message)
+		getStatus, ok := decodedMessage.Message.(core.GetStatusMessage)
+		if !ok {
+			fmt.Printf("error: %s", getStatus)
+			return fmt.Errorf("failed to cast message to getstatus")
+		}
+		return s.processGetStatus(from, &getStatus)
+	case Status:
+		status, ok := decodedMessage.Message.(core.StatusMessage)
+		if !ok {
+			return fmt.Errorf("failed to cast message to status")
+		}
+		return s.processStatus(from, &status)
 	default:
 		return fmt.Errorf("unknown message type: %d", decodedMessage.Header)
 	}
 }
 
 func (s *Server) broadcast(from net.Addr, payload []byte) error {
+	s.ServerOptions.Logger.Log("asd", "broadcasting to", len(s.Peers))
 	for _, peer := range s.Peers {
 		// don't send the message back to the peer that sent it to us
 		// nil condition is checked because this data might not be from anyone
@@ -287,6 +309,25 @@ func (s *Server) broadcastBlock(from net.Addr, block *core.Block) {
 	if err != nil {
 		logrus.WithError(err).Error("Failed to broadcast block")
 	}
+}
+
+func (s *Server) broadcastGetStatus() error {
+	getStatusBytes := bytes.Buffer{}
+	getStatusMessage := new(core.GetStatusMessage)
+
+	if err := gob.NewEncoder(&getStatusBytes).Encode(getStatusMessage); err != nil {
+		return err
+	}
+
+	msg := NewMessage(GetStatus, getStatusBytes.Bytes())
+
+	s.ServerOptions.Logger.Log("msg", "Broadcasting get status", "Message", getStatusBytes.Bytes())
+
+	err := s.broadcast(nil, msg.Bytes())
+	if err != nil {
+		logrus.WithError(err).Error("Failed to broadcast block")
+	}
+	return nil
 }
 
 // handling blocks coming into the blockchain
@@ -358,6 +399,38 @@ func (s *Server) processTransaction(from net.Addr, tx *core.Transaction) error {
 
 	// add transaction to mempool
 	return s.memPool.Add(tx)
+}
+
+func (s *Server) processGetStatus(from net.Addr, getStatus *core.GetStatusMessage) error {
+	s.ServerOptions.Logger.Log("msg", "Received new getstatus message", getStatus)
+
+	statusMessage := &core.StatusMessage{
+		CurrentHeight: s.chain.GetHeight(),
+		ID:            s.ServerOptions.ID,
+	}
+
+	buf := new(bytes.Buffer)
+
+	if err := gob.NewEncoder(buf).Encode(statusMessage); err != nil {
+		return err
+	}
+
+	msg := NewMessage(Status, buf.Bytes())
+
+	// Get TCP Peer who sent the message, send status to that peer
+	for _, peer := range s.Peers {
+		if peer.conn.RemoteAddr() == from {
+			peer.Send(msg.Bytes())
+			return nil
+		}
+	}
+
+	return fmt.Errorf("couldn't find who sent getStatus")
+}
+
+func (s *Server) processStatus(from net.Addr, status *core.StatusMessage) error {
+	s.ServerOptions.Logger.Log("msg", "Received new status message", status)
+	return nil
 }
 
 // Stop will stop the server.

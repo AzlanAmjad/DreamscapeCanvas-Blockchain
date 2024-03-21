@@ -28,6 +28,8 @@ type MessageType byte
 const (
 	Transaction MessageType = iota
 	Block
+	Status
+	GetStatus
 )
 
 // Message is a struct containing the message type and the payload.
@@ -82,6 +84,16 @@ func DefaultRPCDecoder(rpc ReceiveRPC) (*DecodedMessage, error) {
 			return nil, err
 		}
 		return &DecodedMessage{Header: msg.Header, From: rpc.From, Message: *block}, nil
+	case GetStatus:
+		return &DecodedMessage{Header: msg.Header, From: rpc.From, Message: nil}, nil
+	case Status:
+		statusMessage := new(core.GetStatusMessage)
+		err = gob.NewDecoder(bytes.NewReader(msg.Payload)).Decode(statusMessage)
+		if err != nil {
+			return nil, err
+		}
+		return &DecodedMessage{Header: msg.Header, From: rpc.From, Message: statusMessage}, nil
+
 	default:
 		return nil, fmt.Errorf("unknown message type: %d", msg.Header)
 	}
